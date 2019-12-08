@@ -1,0 +1,258 @@
+###Dieses Skript bezieht sich auf die Gesamthochrechnung der Zielvariable Unfallkategorie von Unfallatlas Sachsen auf den Deutschlands.
+###Die Daten stammen aus der Unfallstatistik im Jahr 2018. https://unfallatlas.statistikportal.de/_opendata2019.html
+###Unfallkategorie setzt sich aus (in Abkuerzung) Kate1,Kate2 und Kate3 zusammen. Dies entsprechen Unfaellen mit Getoeteten, Schwer- und Leichtverletzten
+###Programmablaufplan Siehe Anhang der Arbeit
+###Es gibt im Skript drei Teile: RandomForest- und Entscheidungsbaumverfahren,Gesamthochrechnung und Ergibnissendarstellung
+
+###RandomForest- und Entscheidungsbaumverfahren________________________________________________
+
+#Vorbereitung der Daten
+Datenquell<-subset(Sachsen1,select =-c(OBJECTID,UMONAT,USTUNDE,UWOCHENTAG))
+Datenziel<-subset(Deutschland1,select =-c(OBJECTID,UMONAT,USTUNDE,UWOCHENTAG))
+train<-sample(nrow(Datenquell),0.98*nrow(Datenquell)) #Anteil 0.98 siehe Zitation nach Literatur
+tdaten<-Datenquell[train,] #Trainingdaten
+vdaten<-Datenquell[-train,]#Testdaten
+
+# Bestimmen von mtry(Die Anzahl der Stichprobe bei Bestimmung der Knoten)
+library(randomForest)
+n<-length(names(tdaten))
+set.seed(100)
+for(i in 1:5)#Normalerweise werden n Mal Stichprobe durchgefuehrt. Das ist aber aufwendig. 5mal reicht
+  {
+  set.seed(100)
+  rf_train<-randomForest(as.factor(tdaten$UKATEGORIE)~., data=tdaten, mtry=i,replace=TRUE)#Replace=TRUE->Stichprobe nachBootstrap
+  rate<-mean(rf_train$err.rate) #Error base of OoB
+  print(rate)
+  print(rf_train)
+  }
+
+# Die Anzahl der EB auf Basis von Oob
+set.seed(100)
+rf_train<-randomForest(as.factor(tdaten$UKATEGORIE)~.,data=tdaten,mtry=2,replace=TRUE,ntree=1000)#man benutyt das obige mtry mit dem kleinsten OOB
+plot(rf_train) #Ab ca. trees=50 sind die Fehler stabil
+
+# Wichtigkeit der EB
+set.seed(100)
+rf_train<-randomForest(as.factor(tdaten$UKATEGORIE)~.,data=tdaten,mtry=3,replace=TRUE,ntree=50,
+                       importance=TRUE,proximity=TRUE)
+
+set.seed(100)
+varImpPlot(rf_train,type=1,sort=TRUE,main="Wichtigkeit der EV nach min. Fehler")
+
+#Anzahl der Knoten(Blaetter)   
+hist(treesize(rf_train))#Baumgroesse und Frequenz          
+max(treesize(rf_train))#Anzahl der Baeume bei dem groessten Randemforest
+min(treesize(rf_train))#Anzahl der Baeume bei dem kleinsten Randemforest  
+
+#Ueberpruefung der Genauigkeit durch die Funktion predict
+pred<-predict(rf_train,newdata=vdaten)  
+pred_out_1<-predict(object=rf_train,newdata=vdaten,type="prob")  #Wahrscheinlichkeit als type
+table <- table(pred,vdaten$UKATEGORIE)  
+sum(diag(table))/sum(table)
+plot(margin(rf_train,vdaten$UKATEGORIE),main="Genauigkeit bei Predict im Bezug auf Unfallanzahl")#
+
+#Erstellen EB auf Basis von Quelldatenban bevor Stutzen(Ueberanpassung veranschaulichen)
+library(rpart)
+library(rpart.plot) 
+ctree_quell=rpart(as.factor(UKATEGORIE)~IstLicht1+IstTyp5+IstArt1+IstArt9+IstLicht0+IstArt2+IstArt7
+                  +IstStr1+IstStr2+IstTyp7,data = Datenquell,method = "class",cp=-1) #10 wichtigste Parameter werden benutzt,cp=neg. -->ohne stutzen
+rpart.plot(ctree_quell,type = 1, extra=101,fallen.leaves=TRUE,nn=TRUE,branch=0.9,xflip=TRUE,
+           compress=TRUE,ycompress=TRUE,space=0.1,yspace=0.1,trace=TRUE,cex=0.5,box.palette=0)#Tree veranschulichen
+
+# #Erstellen EB auf Basis von Quelldatenban nach Stutzen(bei Verwendung Uncomment erfoderlich,gemaess cross-validation o. 0.5%.)
+# ind=as.numeric(rownames(Datenquell))
+# ms=round(0.005*length(ind))#Min Nummer von Beobachtungen bei Knoten fuer Weiteren Aufbau
+# ctree_quell=rpart(as.factor(UKATEGORIE)~IstLicht1+IstTyp5+IstArt1+IstArt9+IstLicht0+IstArt2+IstArt7
+#                   +IstStr1+IstStr2+IstTyp7,data = Datenquell,method = "class",x=TRUE,y=TRUE,
+#                   parms = list(split="gini"),cp=-1,minsplit=ms,maxdepth = 5) #gini als Splitterkriterium
+# 
+# rpart.plot(ctree_quell,type = 1, extra=101,fallen.leaves=TRUE,nn=TRUE,branch=0.9,xflip=TRUE,
+#            compress=TRUE,ycompress=TRUE,space=0.1,yspace=0.1,trace=TRUE,cex=0.55, box.palette=0)
+
+#Erstellen EB auf Basis von Quelldatenban nach ID3(bei Verwendung Uncomment erfoderlich)
+ind=as.numeric(rownames(Datenquell))
+ms=round(0.005*length(ind))#Min Nummer von Beobachtungen bei Knoten fuer Weiteren Aufbau
+ctree_quell=rpart(as.factor(UKATEGORIE)~IstLicht1+IstTyp5+IstArt1+IstArt9+IstLicht0+IstArt2+IstArt7
+                  +IstStr1+IstStr2+IstTyp7,data = Datenquell,method = "class",x=TRUE,y=TRUE,
+                  parms = list(split="information"),cp=-1,minsplit=ms,maxdepth = 5)#ID3 als Splitterkriterium
+
+
+rpart.plot(ctree_quell,type = 1, extra=101,fallen.leaves=TRUE,nn=TRUE,branch=0.9,xflip=TRUE,
+           compress=TRUE,ycompress=TRUE,space=0.1,yspace=0.1,trace=TRUE,cex=0.55, box.palette=0)
+
+library(rattle)
+fancyRpartPlot(ctree_quell,cex=0.55)#Die Grafik automatisch verfeinern
+asRules(ctree_quell)#Splitterregel des Trees
+summary(ctree_quell)#xerror und xstd min->cp
+rpart.rules(ctree_quell,style = "wide")
+
+###Gesamthorechnung_______________________________________________________________________________
+
+#Die Funktion die die Stichprobe gibt an. Nach Funktion der Publikation veraendern
+blatt2<-function(tree,nodenumber,daten)
+{
+  
+  if(mean(attr(tree$terms,'dataClasses')=='factor')==1)
+  {list=(strsplit(path.rpart(tree,nodenumber,print.it=FALSE)[[1]][-1],','))
+  list2=list
+  
+  
+  for(i in 1:length(list))
+  {
+    list2[[i]]=unlist(strsplit(list[[i]],'='))
+    tmp2=list2[[i]]
+    for(j in 2:length(list2[[i]]))
+      tmp2[j]=sprintf('%s==list2[[%i]][%i]',list2[[i]][1],i,j)
+    list[[i]]=sprintf('(%s)',paste(tmp2[-1],collapse = '|'))
+  }
+  
+  
+  return(subset(daten,eval(parse(text=paste(unlist(list),collapse=' & ')))))}
+  else{subset(daten,eval(parse(text=paste(path.rpart(tree,nodenumber,print.it=FALSE)[[1]][-1],collapse=' & '))))}
+}
+
+#Die Funktion der Blattverteilung ueber Knotennummer
+blattverteilung<-function(tree,nodenumber,daten)
+{
+  tmp=blatt2(tree,nodenumber,daten)
+  table(tmp$UKATEGORIE)/length(tmp$UKATEGORIE)
+}
+
+#Gibt die Verletzungsverteilung in absoluten Zahlen des Blattes mit der Nummer (nodenumber) des Baumes (tree) vom Datensatz (daten) an
+blattverteilung2<-function(tree,nodenumber,daten)
+{
+  if(nodenumber>1)
+  {tmp=blatt2(tree,nodenumber,daten)}else
+  {
+    tmp=daten
+  }
+  if(dim(tmp)[[1]]>0)
+  {return(table(tmp$UKATEGORIE))}else
+  {return(matrix(0,1,length(levels(as.factor(tmp$UKATEGORIE)))))}
+  
+}
+
+#Diese Funktion gibt die Verteilung und relative Verteilung der Blaetter.Nach Funktion der Publikation veraendern
+Verteilungsausgabe2<-function(tree,daten1,daten2)
+{
+  nodes=as.numeric(dimnames(tree$frame)[[1]])[tree$frame$var=="<leaf>"]#gleich
+  nodes2=as.numeric(dimnames(tree$frame)[[1]])[tree$frame$var!="<leaf>"]#！= nicht gleich
+  erg=matrix(0,2*length(nodes),6)
+  erg2=matrix(0,2*length(nodes2),6)
+  tmp2=dimnames(erg)
+  tmp2[[2]]=c('Uzahl','Kate1','Kate2','Kate3','Nodepro','Nodenumber')
+  dimnames(erg)=tmp2
+  dimnames(erg2)=tmp2
+  
+  for(i in 1:length(nodes2))
+  {
+    erg2[2*i-1,6]=nodes2[i]#Knotennummer festlegen
+    erg2[2*i,6]=nodes2[i]
+    tmp=blattverteilung2(tree,nodes2[i],daten1)
+    erg2[2*i-1,1]=sum(tmp)#Uzahl in ungeraden Zeilen
+    erg2[2*i-1,5]=erg2[2*i-1,1]/erg2[1,1]#Knotenprobilit.
+    if(erg2[2*i-1,1]>0)
+    {
+      for(j in 1:3)
+        erg2[2*i-1,j+1]=tmp[j]/erg2[2*i-1,1]
+    }
+    tmp=blattverteilung2(tree,nodes2[i],daten2)
+    erg2[2*i,1]=sum(tmp)
+    erg2[2*i,5]=erg2[2*i,1]/erg2[2,1]
+    if(erg2[2*i,1]>0)
+    {
+      for(j in 1:3)
+        erg2[2*i,j+1]=tmp[j]/erg2[2*i,1]
+    }
+  } 
+  
+  
+  for(i in 1:length(nodes))
+  {
+    erg[2*i-1,6]=nodes[i]
+    erg[2*i,6]=nodes[i]
+    tmp=blattverteilung2(tree,nodes[i],daten1)
+    erg[2*i-1,1]=sum(tmp)
+    erg[2*i-1,5]=sum(tmp)/erg2[1,1]
+    
+    if(erg[2*i-1,1]>0)
+    {
+      for(j in 1:3)
+        erg[2*i-1,j+1]=tmp[j]/erg[2*i-1,1]#第2-4行是比值
+    }
+    
+    tmp=blattverteilung2(tree,nodes[i],daten2)
+    erg[2*i,1]=sum(tmp)
+    erg[2*i,5]=sum(tmp)/erg2[2,1]
+    if(erg[2*i,1]>0)
+    {
+      for(j in 1:3)
+        erg[2*i,j+1]=tmp[j]/erg[2*i,1]
+    }
+  }
+  
+  
+  tmp=new.env()
+  erg2[is.na(erg2)]<-0
+  tmp$"Knoten"=erg2
+  erg[is.na(erg)]<-0
+  tmp$"Blatt"=erg
+  
+  return(as.list(tmp))
+}
+
+#Gesamthochrechnung bei SA
+#Bestimmung die Verteilung(V), relative Verteilung(rV) und Hochrechnungsverteilung(H) der ZV
+#tree ist der Baum aus der Funktion rpart
+#daten1 ist Quelldatenbank und daten2 ist Zieldatenbank
+gesamtHoch<-function(tree,daten1,daten2)
+{
+  tmp=Verteilungsausgabe2(tree,daten1,daten2)
+  ver=data.frame(tmp$Blatt)
+  ver2=data.frame(tmp$Knoten)
+  
+  rown=c('Kate1','Kate2','Kate3')
+  coln=c('Quell','Ziel','Hochrechnung','delta1','delta2')#delta1<-aehlichkeitsmass zw. Quelldaten und Hochrechnung
+  erg=matrix(0,3,5,dimnames = list(rown,coln))
+  
+  
+  nodes=as.numeric(dimnames(tree$frame)[[1]])[tree$frame$var=="<leaf>"]
+  
+  for(i in 1:length(nodes))
+  {
+    erg[1,1]=erg[1,1]+sum(ver[2*i-1,2]*ver[2*i-1,1]/ver2[1,1])
+    erg[2,1]=erg[2,1]+sum(ver[2*i-1,3]*ver[2*i-1,1]/ver2[1,1])
+    erg[3,1]=erg[3,1]+sum(ver[2*i-1,4]*ver[2*i-1,1]/ver2[1,1])#Gesamtverteilung fuer Kate1-3 aus Quelldatenbank
+    
+    erg[1,2]=erg[1,2]+sum(ver[2*i,2]*ver[2*i,1]/ver2[2,1])
+    erg[2,2]=erg[2,2]+sum(ver[2*i,3]*ver[2*i,1]/ver2[2,1])
+    erg[3,2]=erg[3,2]+sum(ver[2*i,4]*ver[2*i,1]/ver2[2,1])#Gesamtverteilung fuer Kate1-3 aus Zieldatenbank
+    
+    erg[1,3]=erg[1,3]+sum(ver[2*i-1,2]*ver[2*i,5])
+    erg[2,3]=erg[2,3]+sum(ver[2*i-1,3]*ver[2*i,5])
+    erg[3,3]=erg[3,3]+sum(ver[2*i-1,4]*ver[2*i,5])#Hochrechungsverteilung
+    
+  }
+  
+  for (i in 1:3) {
+    erg[i,4]= ((erg[i,1]-erg[i,3])^2)/erg[i,1] #aehlichkeitsmass zw. Quelldaten und Hochrechnung
+    erg[i,5]= ((erg[i,2]-erg[i,3])^2)/erg[i,2] #aehlichkeitsmass zw. Zieldaten und Hochrechnung
+  }
+  
+  chart<-cbind(Kate1=erg[1,1:3],Kate2=erg[2,1:3],Kate3=erg[3,1:3])
+  row.names(chart)=c('Quell','Ziel','Hochrechnung')
+  barplot(chart,beside = TRUE,legend.text = TRUE,args.legend=c(x=4.5,y= 0.8),ylab = 'ZV-Verteilung',
+          main ='Ergebnisse der Gesamthochrechnung' )
+  
+  tmp=new.env()
+  tmp$'Hochrechnungsergebnisse'=erg
+  
+  return(as.list(tmp))
+}
+
+
+###Ergibnissendarstellung_________________________________________________________________________
+
+Verteilungsausgabe2(ctree_quell,Datenquell,Datenziel)
+gesamtHoch(ctree_quell,Datenquell,Datenziel)
+
